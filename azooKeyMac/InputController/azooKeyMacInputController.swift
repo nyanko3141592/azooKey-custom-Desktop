@@ -4,7 +4,6 @@
 //
 //  Created by ensan on 2021/09/07.
 //
-
 import Cocoa
 import InputMethodKit
 import KanaKanjiConverterModuleWithDefaultDictionary
@@ -12,174 +11,6 @@ import OSLog
 
 let applicationLogger: Logger = Logger(
     subsystem: "dev.ensan.inputmethod.azooKeyMac", category: "main")
-
-enum UserAction {
-    case input(String)
-    case delete
-    case enter
-    case space
-    case unknown
-    case 英数
-    case かな
-    case navigation(NavigationDirection)
-
-    enum NavigationDirection {
-        case up, down, right, left
-    }
-}
-
-indirect enum ClientAction {
-    case `consume`
-    case `fallthrough`
-    case showCandidateWindow
-    case hideCandidateWindow
-    case appendToMarkedText(String)
-    case removeLastMarkedText
-    case moveCursorToStart
-    case moveCursor(Int)
-
-    case commitMarkedText
-    case submitSelectedCandidate
-    case forwardToCandidateWindow(NSEvent)
-    case selectInputMode(InputMode)
-
-    enum InputMode {
-        case roman
-        case japanese
-    }
-
-    case sequence([ClientAction])
-}
-
-enum InputState {
-    case none
-    case composing
-    /// 変換範囲をユーザが調整したか
-    case selecting(rangeAdjusted: Bool)
-
-    mutating func event(_ event: NSEvent!, userAction: UserAction) -> ClientAction {
-        if event.modifierFlags.contains(.command) {
-            return .fallthrough
-        }
-        if event.modifierFlags.contains(.option) {
-            guard case .input = userAction else {
-                return .fallthrough
-            }
-        }
-        switch self {
-        case .none:
-            switch userAction {
-            case .input(let string):
-                self = .composing
-                return .appendToMarkedText(string)
-            case .かな:
-                return .selectInputMode(.japanese)
-            case .英数:
-                return .selectInputMode(.roman)
-            case .unknown, .navigation, .space, .delete, .enter:
-                return .fallthrough
-            }
-        case .composing:
-            switch userAction {
-            case .input(let string):
-                return .appendToMarkedText(string)
-            case .delete:
-                return .removeLastMarkedText
-            case .enter:
-                self = .none
-                return .commitMarkedText
-            case .space:
-                self = .selecting(rangeAdjusted: false)
-                return .showCandidateWindow
-            case .かな:
-                return .selectInputMode(.japanese)
-            case .英数:
-                self = .none
-                return .sequence([.commitMarkedText, .selectInputMode(.roman)])
-            case .navigation(let direction):
-                if direction == .down {
-                    self = .selecting(rangeAdjusted: false)
-                    return .showCandidateWindow
-                } else if direction == .right && event.modifierFlags.contains(.shift) {
-                    self = .selecting(rangeAdjusted: true)
-                    return .sequence([.moveCursorToStart, .moveCursor(1), .showCandidateWindow])
-                } else if direction == .left && event.modifierFlags.contains(.shift) {
-                    self = .selecting(rangeAdjusted: true)
-                    return .sequence([.moveCursor(-1), .showCandidateWindow])
-                } else {
-                    // ナビゲーションはハンドルしてしまう
-                    return .consume
-                }
-            case .unknown:
-                return .fallthrough
-            }
-        case .selecting(let rangeAdjusted):
-            switch userAction {
-            case .input(let string):
-                self = .composing
-                return .sequence([.submitSelectedCandidate, .appendToMarkedText(string)])
-            case .enter:
-                self = .none
-                return .submitSelectedCandidate
-            case .delete:
-                self = .composing
-                return .removeLastMarkedText
-            case .space:
-                // Spaceは下矢印キーに、Shift + Spaceは上矢印キーにマップする
-                // 下矢印キー: \u{F701} / 125
-                // 上矢印キー: \u{F700} / 126
-                let (keyCode, characters) =
-                    if event.modifierFlags.contains(.shift) {
-                        (126 as UInt16, "\u{F700}")
-                    } else {
-                        (125 as UInt16, "\u{F701}")
-                    }
-                // 下矢印キーを押した場合と同等のイベントを作って送信する
-                return .forwardToCandidateWindow(
-                    .keyEvent(
-                        with: .keyDown,
-                        location: event.locationInWindow,
-                        modifierFlags: event.modifierFlags.subtracting(.shift),  // シフトは除去する
-                        timestamp: event.timestamp,
-                        windowNumber: event.windowNumber,
-                        context: nil,
-                        characters: characters,
-                        charactersIgnoringModifiers: characters,
-                        isARepeat: event.isARepeat,
-                        keyCode: keyCode
-                    ) ?? event
-                )
-            case .navigation(let direction):
-                if direction == .right {
-                    if event.modifierFlags.contains(.shift) {
-                        if rangeAdjusted {
-                            return .sequence([.moveCursor(1), .showCandidateWindow])
-                        } else {
-                            self = .selecting(rangeAdjusted: true)
-                            return .sequence([
-                                .moveCursorToStart, .moveCursor(1), .showCandidateWindow,
-                            ])
-                        }
-                    } else {
-                        return .submitSelectedCandidate
-                    }
-                } else if direction == .left && event.modifierFlags.contains(.shift) {
-                    self = .selecting(rangeAdjusted: true)
-                    return .sequence([.moveCursor(-1), .showCandidateWindow])
-                } else {
-                    return .forwardToCandidateWindow(event)
-                }
-            case .かな:
-                return .selectInputMode(.japanese)
-            case .英数:
-                self = .none
-                return .sequence([.submitSelectedCandidate, .selectInputMode(.roman)])
-            case .unknown:
-                return .fallthrough
-            }
-        }
-    }
-}
 
 @objc(azooKeyMacInputController)
 class azooKeyMacInputController: IMKInputController {
@@ -366,37 +197,33 @@ class azooKeyMacInputController: IMKInputController {
             return false
         }
         // 入力モードの切り替え以外は無視
-        if self.directMode, event.keyCode != 104 && event.keyCode != 102 {
+        if self.directMode, event.keyCode != KeyCode.eisu && event.keyCode != KeyCode.kana {
             return false
         }
-        // https://developer.mozilla.org/ja/docs/Web/API/UI_Events/Keyboard_event_code_values#mac_%E3%81%A7%E3%81%AE%E3%82%B3%E3%83%BC%E3%83%89%E5%80%A4
+
         let clientAction =
             switch event.keyCode {
-            case 36:  // Enter
+            case KeyCode.enter:
                 self.inputState.event(event, userAction: .enter)
-            case 48:  // Tab
+            case KeyCode.tab:
                 self.inputState.event(event, userAction: .unknown)
-            case 49:  // Space
+            case KeyCode.space:
                 self.inputState.event(event, userAction: .space)
-            case 51:  // Delete
+            case KeyCode.delete:
                 self.inputState.event(event, userAction: .delete)
-            case 53:  // Escape
+            case KeyCode.escape:
                 self.inputState.event(event, userAction: .unknown)
-            case 102:  // Lang2/kVK_JIS_Eisu
+            case KeyCode.eisu:
                 self.inputState.event(event, userAction: .英数)
-            case 104:  // Lang1/kVK_JIS_Kana
+            case KeyCode.kana:
                 self.inputState.event(event, userAction: .かな)
-            case 123:  // Left
-                // uF702
+            case KeyCode.left:
                 self.inputState.event(event, userAction: .navigation(.left))
-            case 124:  // Right
-                // uF703
+            case KeyCode.right:
                 self.inputState.event(event, userAction: .navigation(.right))
-            case 125:  // Down
-                // uF701
+            case KeyCode.down:
                 self.inputState.event(event, userAction: .navigation(.down))
-            case 126:  // Up
-                // uF700
+            case KeyCode.up:
                 self.inputState.event(event, userAction: .navigation(.up))
             default:
                 if let text = event.characters, self.isPrintable(text) {
@@ -417,102 +244,29 @@ class azooKeyMacInputController: IMKInputController {
         // return only false
         switch clientAction {
         case .showCandidateWindow:
-            self.showCandidateWindow()
+            self.handleShowCandidateWindow(client: client)
         case .hideCandidateWindow:
-            self.candidatesWindow.hide()
+            self.handleHideCandidateWindow(client: client)
         case .selectInputMode(let mode):
-            client.overrideKeyboard(withKeyboardNamed: "com.apple.keylayout.US")
-            switch mode {
-            case .roman:
-                client.selectMode("dev.ensan.inputmethod.azooKeyMac.Roman")
-                self.kanaKanjiConverter.sendToDicdataStore(.closeKeyboard)
-            case .japanese:
-                client.selectMode("dev.ensan.inputmethod.azooKeyMac.Japanese")
-            }
+            self.handleSelectInputMode(mode, client: client)
         case .appendToMarkedText(let string):
-            self.candidatesWindow.hide()
-            self.composingText.insertAtCursorPosition(string, inputStyle: .roman2kana)
-            self.updateRawCandidate()
-            // Live Conversion
-            let text =
-                if self.liveConversionEnabled,
-                    let firstCandidate = self.rawCandidates?.mainResults.first
-                {
-                    firstCandidate.text
-                } else {
-                    self.composingText.convertTarget
-                }
-            self.updateMarkedTextInComposingMode(text: text, client: client)
+            self.handleAppendToMarkedText(string, client: client)
         case .moveCursor(let value):
-            _ = self.composingText.moveCursorFromCursorPosition(count: value)
-            self.updateRawCandidate()
+            self.handleMoveCursor(value, client: client)
         case .moveCursorToStart:
-            _ = self.composingText.moveCursorFromCursorPosition(
-                count: -self.composingText.convertTargetCursorPosition)
-            self.updateRawCandidate()
+            self.handleMoveCursorToStart(client: client)
         case .commitMarkedText:
-            let candidateString =
-                self.displayedTextInComposingMode ?? self.composingText.convertTarget
-            client.insertText(
-                self.displayedTextInComposingMode ?? self.composingText.convertTarget,
-                replacementRange: NSRange(location: NSNotFound, length: 0))
-            if let candidate = self.rawCandidates?.mainResults.first(where: {
-                $0.text == candidateString
-            }) {
-                self.update(with: candidate)
-            }
-            self.kanaKanjiConverter.stopComposition()
-            self.composingText.stopComposition()
-            self.candidatesWindow.hide()
-            self.displayedTextInComposingMode = nil
+            self.handleCommitMarkedText(client: client)
         case .submitSelectedCandidate:
-            let candidateString = self.selectedCandidate ?? self.composingText.convertTarget
-            client.insertText(
-                candidateString, replacementRange: NSRange(location: NSNotFound, length: 0))
-            guard
-                let candidate = self.rawCandidates?.mainResults.first(where: {
-                    $0.text == candidateString
-                })
-            else {
-                self.kanaKanjiConverter.stopComposition()
-                self.composingText.stopComposition()
-                self.rawCandidates = nil
-                return true
-            }
-            // アプリケーションサポートのディレクトリを準備しておく
-            self.update(with: candidate)
-            self.composingText.prefixComplete(correspondingCount: candidate.correspondingCount)
-
-            self.selectedCandidate = nil
-            if self.composingText.isEmpty {
-                self.rawCandidates = nil
-                self.kanaKanjiConverter.stopComposition()
-                self.composingText.stopComposition()
-                self.candidatesWindow.hide()
-            } else {
-                self.inputState = .selecting(rangeAdjusted: false)
-                self.updateRawCandidate()
-                client.setMarkedText(
-                    NSAttributedString(string: self.composingText.convertTarget, attributes: [:]),
-                    selectionRange: .notFound,
-                    replacementRange: NSRange(location: NSNotFound, length: 0)
-                )
-                self.showCandidateWindow()
-            }
+            self.handleSubmitSelectedCandidate(client: client)
         case .removeLastMarkedText:
-            self.candidatesWindow.hide()
-            self.composingText.deleteBackwardFromCursorPosition(count: 1)
-            self.updateMarkedTextInComposingMode(
-                text: self.composingText.convertTarget, client: client)
-            if self.composingText.isEmpty {
-                self.inputState = .none
-            }
+            self.handleRemoveLastMarkedText(client: client)
         case .consume:
             return true
         case .fallthrough:
             return false
         case .forwardToCandidateWindow(let event):
-            self.candidatesWindow.interpretKeyEvents([event])
+            self.handleForwardToCandidateWindow(event, client: client)
         case .sequence(let actions):
             var found = false
             for action in actions {
@@ -523,6 +277,121 @@ class azooKeyMacInputController: IMKInputController {
             return found
         }
         return true
+    }
+
+    @MainActor private func handleShowCandidateWindow(client: IMKTextInput) {
+        self.showCandidateWindow()
+    }
+
+    @MainActor private func handleHideCandidateWindow(client: IMKTextInput) {
+        self.candidatesWindow.hide()
+    }
+
+    @MainActor private func handleSelectInputMode(
+        _ mode: ClientAction.InputMode, client: IMKTextInput
+    ) {
+        client.overrideKeyboard(withKeyboardNamed: "com.apple.keylayout.US")
+        switch mode {
+        case .roman:
+            client.selectMode("dev.ensan.inputmethod.azooKeyMac.Roman")
+            self.kanaKanjiConverter.sendToDicdataStore(.closeKeyboard)
+        case .japanese:
+            client.selectMode("dev.ensan.inputmethod.azooKeyMac.Japanese")
+        }
+    }
+
+    @MainActor private func handleAppendToMarkedText(_ string: String, client: IMKTextInput) {
+        self.candidatesWindow.hide()
+        self.composingText.insertAtCursorPosition(string, inputStyle: .roman2kana)
+        self.updateRawCandidate()
+        // Live Conversion
+        let text =
+            if self.liveConversionEnabled,
+                let firstCandidate = self.rawCandidates?.mainResults.first
+            {
+                firstCandidate.text
+            } else {
+                self.composingText.convertTarget
+            }
+        self.updateMarkedTextInComposingMode(text: text, client: client)
+    }
+
+    @MainActor private func handleMoveCursor(_ value: Int, client: IMKTextInput) {
+        _ = self.composingText.moveCursorFromCursorPosition(count: value)
+        self.updateRawCandidate()
+    }
+
+    @MainActor private func handleMoveCursorToStart(client: IMKTextInput) {
+        _ = self.composingText.moveCursorFromCursorPosition(
+            count: -self.composingText.convertTargetCursorPosition)
+        self.updateRawCandidate()
+    }
+
+    @MainActor private func handleCommitMarkedText(client: IMKTextInput) {
+        let candidateString =
+            self.displayedTextInComposingMode ?? self.composingText.convertTarget
+        client.insertText(
+            self.displayedTextInComposingMode ?? self.composingText.convertTarget,
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        if let candidate = self.rawCandidates?.mainResults.first(where: {
+            $0.text == candidateString
+        }) {
+            self.update(with: candidate)
+        }
+        self.kanaKanjiConverter.stopComposition()
+        self.composingText.stopComposition()
+        self.candidatesWindow.hide()
+        self.displayedTextInComposingMode = nil
+    }
+
+    @MainActor private func handleSubmitSelectedCandidate(client: IMKTextInput) {
+        let candidateString = self.selectedCandidate ?? self.composingText.convertTarget
+        client.insertText(
+            candidateString, replacementRange: NSRange(location: NSNotFound, length: 0))
+        guard
+            let candidate = self.rawCandidates?.mainResults.first(where: {
+                $0.text == candidateString
+            })
+        else {
+            self.kanaKanjiConverter.stopComposition()
+            self.composingText.stopComposition()
+            self.rawCandidates = nil
+            return
+        }
+        // アプリケーションサポートのディレクトリを準備しておく
+        self.update(with: candidate)
+        self.composingText.prefixComplete(correspondingCount: candidate.correspondingCount)
+
+        self.selectedCandidate = nil
+        if self.composingText.isEmpty {
+            self.rawCandidates = nil
+            self.kanaKanjiConverter.stopComposition()
+            self.composingText.stopComposition()
+            self.candidatesWindow.hide()
+        } else {
+            self.inputState = .selecting(rangeAdjusted: false)
+            self.updateRawCandidate()
+            client.setMarkedText(
+                NSAttributedString(string: self.composingText.convertTarget, attributes: [:]),
+                selectionRange: .notFound,
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+            self.showCandidateWindow()
+        }
+    }
+
+    @MainActor private func handleRemoveLastMarkedText(client: IMKTextInput) {
+        self.candidatesWindow.hide()
+        self.composingText.deleteBackwardFromCursorPosition(count: 1)
+        self.updateMarkedTextInComposingMode(
+            text: self.composingText.convertTarget, client: client)
+        if self.composingText.isEmpty {
+            self.inputState = .none
+        }
+    }
+
+    @MainActor private func handleForwardToCandidateWindow(_ event: NSEvent, client: IMKTextInput) {
+        self.candidatesWindow.interpretKeyEvents([event])
     }
 
     @MainActor private func updateRawCandidate() {

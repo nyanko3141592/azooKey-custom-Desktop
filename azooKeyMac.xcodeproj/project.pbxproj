@@ -197,13 +197,21 @@
 		E92873D12BEF8BEF00D98AAF /* InputController */ = {
 			isa = PBXGroup;
 			children = (
-				1A41E64326E74669009B65D7 /* azooKeyMacInputController.swift */,
-				E92873D22BEF8C0E00D98AAF /* UserAction.swift */,
-				E92873D42BEF8C1F00D98AAF /* ClientAction.swift */,
 				E92873D62BEF8C2C00D98AAF /* InputState.swift */,
+				E97BB8B52BEF982B0098C974 /* Action */,
+				1A41E64326E74669009B65D7 /* azooKeyMacInputController.swift */,
 				E92873D82BEF8C3F00D98AAF /* KeyCode.swift */,
 			);
 			path = InputController;
+			sourceTree = "<group>";
+		};
+		E97BB8B52BEF982B0098C974 /* Action */ = {
+			isa = PBXGroup;
+			children = (
+				E92873D22BEF8C0E00D98AAF /* UserAction.swift */,
+				E92873D42BEF8C1F00D98AAF /* ClientAction.swift */,
+			);
+			path = Action;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

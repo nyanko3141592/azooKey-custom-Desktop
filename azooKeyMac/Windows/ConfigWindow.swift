@@ -32,6 +32,7 @@ struct ConfigWindow: View {
                 Text("アクセシビリティ権限がありません")
                     .foregroundColor(.red)
                 Button(action: {
+                    // TODO: Request permission to access does not work
                     requestAccessibilityPermissions()
                 }) {
                     Text("アクセシビリティ権限をリクエスト")

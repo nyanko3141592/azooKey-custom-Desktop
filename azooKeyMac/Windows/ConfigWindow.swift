@@ -1,11 +1,5 @@
-//
-//  ConfigWindow.swift
-//  azooKeyMac
-//
-//  Created by miwa on 2024/04/23.
-//
-
 import SwiftUI
+import AppKit
 
 struct ConfigWindow: View {
     @ConfigState private var liveConversion = Config.LiveConversion()
@@ -14,6 +8,7 @@ struct ConfigWindow: View {
     @ConfigState private var openAiApiKey = Config.OpenAiApiKey()
     @ConfigState private var learning = Config.Learning()
     @ConfigState private var inferenceLimit = Config.ZenzaiInferenceLimit()
+    @State private var isAccessibilityTrusted = AXIsProcessTrusted()
 
     var body: some View {
         VStack {
@@ -29,7 +24,43 @@ struct ConfigWindow: View {
                 Text("学習を停止").tag(Config.Learning.Value.onlyOutput)
                 Text("学習を無視").tag(Config.Learning.Value.nothing)
             }
+
+            if isAccessibilityTrusted {
+                Text("アクセシビリティ権限が付与されています")
+                    .foregroundColor(.green)
+            } else {
+                Text("アクセシビリティ権限がありません")
+                    .foregroundColor(.red)
+                Button(action: {
+                    requestAccessibilityPermissions()
+                }) {
+                    Text("アクセシビリティ権限をリクエスト")
+                        .padding(.top, 10)
+                }
+            }
+
+            Button(action: {
+                let url = URL(
+                    string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+                )!
+                NSWorkspace.shared.open(url)
+            }) {
+                Text("アクセシビリティ設定を開く")
+                    .padding(10)
+            }
         }
-            .frame(width: 400, height: 300)
+        .frame(width: 400, height: 300)
+        .onAppear(perform: checkAccessibilityPermissions)
+    }
+
+    private func requestAccessibilityPermissions() {
+        NSLog("Request Permission to Access")
+        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
+        AXIsProcessTrustedWithOptions(options)
+        checkAccessibilityPermissions()
+    }
+
+    private func checkAccessibilityPermissions() {
+        isAccessibilityTrusted = AXIsProcessTrusted()
     }
 }
